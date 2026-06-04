@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip list *)",
+      "Bash(timeout 3 python meal_picker.py)",
+      "Bash(start python *)"
+    ]
+  }
+}
