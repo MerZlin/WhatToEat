@@ -583,13 +583,16 @@ const DEFAULT_DISHES = [
 const STORAGE_KEY_DISHES = 'meal_picker_dishes';
 const STORAGE_KEY_HISTORY = 'meal_picker_history';
 const ITEM_HEIGHT = 60;
+const SPIN_COPIES = 7;       // 渲染份数（足够多避免越界空白）
+const DECEL_DURATION = 400;  // 减速动画总时长 ms（0.4 秒）
+const SPIN_INTERVAL = 50;    // 匀速转动时每步间隔 ms
 
 let dishes = [];
 let history = [];
 let currentFilter = '全部';
 let isSpinning = false;
 let spinTimer = null;
-let animTimer = null;
+let spinDecelerating = false;
 let spinIndex = 0;
 let lastPicked = null;
 
@@ -711,18 +714,19 @@ function renderRoulette() {
   const filtered = getFilteredDishes();
   if (filtered.length === 0) {
     list.innerHTML = '<div class="roulette-item" style="color:#555">暂无菜品，请先添加</div>';
+    spinIndex = 0;
     return;
   }
-  // 重复3遍以形成循环滚动感
+  // 重复 SPIN_COPIES 份以形成循环滚动感，份数足够多避免越界空白
   const items = [];
-  for (let r = 0; r < 3; r++) {
+  for (let r = 0; r < SPIN_COPIES; r++) {
     filtered.forEach(d => {
       items.push(`<div class="roulette-item">${d.name}</div>`);
     });
   }
   list.innerHTML = items.join('');
-  // 初始位置设在中间那组
-  spinIndex = filtered.length;
+  // 初始位置设在中间那组（第3份）
+  spinIndex = filtered.length * 3;
   updateRoulettePosition(0);
 }
 
@@ -741,15 +745,30 @@ function updateRoulettePosition(duration = 0) {
   });
 }
 
+// 保证 spinIndex 始终在可见范围内（中间几份副本），防止越界空白
+function wrapSpinIndex() {
+  const filtered = getFilteredDishes();
+  const filteredLen = filtered.length;
+  if (filteredLen === 0) return;
+  const totalItems = filteredLen * SPIN_COPIES;
+  // 超出上界时跳回
+  while (spinIndex >= totalItems - filteredLen) {
+    spinIndex -= filteredLen * 3;
+    updateRoulettePosition(0);
+  }
+  // 低于下界时跳前
+  while (spinIndex < filteredLen) {
+    spinIndex += filteredLen * 3;
+    updateRoulettePosition(0);
+  }
+}
+
 // ============ 挑选逻辑 ============
-let spinSpeed = 80;
-let spinDecelerating = false;
 
 function cancelSpin() {
   isSpinning = false;
   spinDecelerating = false;
   if (spinTimer) { clearTimeout(spinTimer); spinTimer = null; }
-  if (animTimer) { clearTimeout(animTimer); animTimer = null; }
 }
 
 function setButtonsState(picking, resultReady) {
@@ -765,46 +784,60 @@ function startPick() {
 
   isSpinning = true;
   spinDecelerating = false;
-  spinSpeed = 60;
   lastPicked = null;
   setButtonsState(true, false);
   document.getElementById('resultArea').innerHTML =
     '<div style="color:var(--text2);font-size:1.1em">🎰 转盘中... 按空格键停止</div>';
 
-  // 确保当前位置在中间组
+  // 确保当前位置在有效可视范围内（中间组）
   const filteredLen = filtered.length;
-  spinIndex = Math.floor(spinIndex / filteredLen) * filteredLen + (spinIndex % filteredLen);
-  if (spinIndex < filteredLen) spinIndex += filteredLen;
-
+  if (spinIndex < filteredLen) spinIndex += filteredLen * 3;
+  if (spinIndex >= filteredLen * SPIN_COPIES) {
+    spinIndex = (spinIndex % filteredLen) + filteredLen * 3;
+  }
+  updateRoulettePosition(0);
   spinOne();
 }
 
 function spinOne() {
   if (!isSpinning) return;
+  if (spinDecelerating) return; // 减速阶段由 CSS transition 接管
 
   const filtered = getFilteredDishes();
   const filteredLen = filtered.length;
+  if (filteredLen === 0) { cancelSpin(); return; }
 
   spinIndex++;
-  updateRoulettePosition(spinSpeed * 0.8);
+  wrapSpinIndex();
+  updateRoulettePosition(SPIN_INTERVAL * 0.8);
 
-  if (spinDecelerating) {
-    spinSpeed += 15;
-    if (spinSpeed > 600) {
-      isSpinning = false;
-      finishPick();
-      return;
-    }
-  }
-
-  spinTimer = setTimeout(spinOne, spinSpeed);
+  spinTimer = setTimeout(spinOne, SPIN_INTERVAL);
 }
 
 function stopPick() {
   if (!isSpinning || spinDecelerating) return;
   spinDecelerating = true;
+  if (spinTimer) { clearTimeout(spinTimer); spinTimer = null; }
   document.getElementById('btnStop').disabled = true;
   document.getElementById('btnStop').textContent = '⏳ 即将揭晓...';
+
+  const filtered = getFilteredDishes();
+  const filteredLen = filtered.length;
+  if (filteredLen === 0) { cancelSpin(); return; }
+
+  // 随机多转 5~14 个条目后停下（产生不确定性）
+  const extraItems = 5 + Math.floor(Math.random() * 10);
+  spinIndex += extraItems;
+  wrapSpinIndex();
+
+  // 用 CSS transition 在 0.4 秒内平滑减速到位
+  updateRoulettePosition(DECEL_DURATION);
+
+  setTimeout(() => {
+    isSpinning = false;
+    spinDecelerating = false;
+    finishPick();
+  }, DECEL_DURATION + 60);
 }
 
 function finishPick() {
@@ -816,6 +849,7 @@ function finishPick() {
 
   const filtered = getFilteredDishes();
   const filteredLen = filtered.length;
+  if (filteredLen === 0) return;
   const actualIndex = ((spinIndex % filteredLen) + filteredLen) % filteredLen;
   const picked = filtered[actualIndex];
 
@@ -824,7 +858,7 @@ function finishPick() {
 
   // 显示结果（带动画）
   document.getElementById('resultArea').innerHTML = `
-    <div class="result-dish" style="animation: none; void.offsetWidth; animation: popIn 0.5s cubic-bezier(0.68, -0.55, 0.27, 1.55);">${picked.name}</div>
+    <div class="result-dish" style="animation: none; animation: popIn 0.5s cubic-bezier(0.68, -0.55, 0.27, 1.55);">${picked.name}</div>
     <div class="result-category">${picked.cat}</div>
   `;
 
@@ -836,12 +870,13 @@ function finishPick() {
 }
 
 function quickPick() {
-  // 通用的快速随机：取消当前动画，平滑滚动到随机结果
+  // 快速随机：取消当前动画，在 0.4 秒内平滑滚动到随机结果
   const filtered = getFilteredDishes();
   if (filtered.length === 0) { alert('请先添加菜品！'); return; }
 
   cancelSpin();
   isSpinning = true;
+  spinDecelerating = true;
   lastPicked = null;
   setButtonsState(true, false);
   document.getElementById('resultArea').innerHTML =
@@ -849,36 +884,26 @@ function quickPick() {
 
   const filteredLen = filtered.length;
   const targetIdx = Math.floor(Math.random() * filteredLen);
-  // 多转几圈
+
+  // 确保 spinIndex 在有效范围
+  if (spinIndex < filteredLen) spinIndex += filteredLen * 3;
+  if (spinIndex >= filteredLen * SPIN_COPIES) {
+    spinIndex = (spinIndex % filteredLen) + filteredLen * 3;
+  }
+
+  // 多转 2~3 圈后落到目标
   const currentGroup = Math.floor(spinIndex / filteredLen);
-  const extraRounds = 2 + Math.floor(Math.random() * 3);
+  const extraRounds = 2 + Math.floor(Math.random() * 2);
   const targetSpinIndex = (currentGroup + extraRounds) * filteredLen + targetIdx;
 
-  const startIndex = spinIndex;
-  const totalSteps = targetSpinIndex - startIndex;
-  const duration = 1200 + Math.random() * 800;
-  const steps = Math.min(Math.abs(totalSteps), 35);
-  const stepDelay = duration / Math.max(steps, 1);
+  spinIndex = targetSpinIndex;
+  updateRoulettePosition(DECEL_DURATION);
 
-  let step = 0;
-  function animateStep() {
-    if (step >= steps) {
-      spinIndex = targetSpinIndex;
-      updateRoulettePosition(0);
-      isSpinning = false;
-      animTimer = null;
-      finishPick();
-      return;
-    }
-    // ease-out 缓动
-    const progress = step / steps;
-    const eased = 1 - Math.pow(1 - progress, 3);
-    spinIndex = Math.round(startIndex + totalSteps * eased);
-    updateRoulettePosition(0);
-    step++;
-    animTimer = setTimeout(animateStep, stepDelay);
-  }
-  animTimer = setTimeout(animateStep, 50); // 微小的启动延迟
+  setTimeout(() => {
+    isSpinning = false;
+    spinDecelerating = false;
+    finishPick();
+  }, DECEL_DURATION + 60);
 }
 
 // ============ 快捷键 ============
