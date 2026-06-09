@@ -1,12 +1,15 @@
 // 下一顿吃什么 - Service Worker
 // 实现离线可用 + "安装"到桌面
 
-const CACHE_NAME = 'meal-picker-v4';
+const CACHE_NAME = 'meal-picker-v5';
 const FILES_TO_CACHE = [
   '.',
   'index.html',
   'manifest.json',
-  'favicon.svg'
+  'favicon.svg',
+  'icon-192.png',
+  'icon-512.png',
+  'apple-touch-icon.png'
 ];
 
 // 安装：预缓存核心文件
