@@ -582,8 +582,6 @@ const DEFAULT_DISHES = [
 // ============ 状态管理 ============
 const STORAGE_KEY_DISHES = 'meal_picker_dishes';
 const STORAGE_KEY_HISTORY = 'meal_picker_history';
-const ITEM_HEIGHT = 60;
-const SPIN_COPIES = 7;       // 渲染份数（足够多避免越界空白）
 const DECEL_DURATION = 400;  // 减速动画总时长 ms（0.4 秒）
 const SPIN_INTERVAL = 50;    // 匀速转动时每步间隔 ms
 
@@ -592,9 +590,14 @@ let history = [];
 let currentFilter = '全部';
 let isSpinning = false;
 let spinTimer = null;
+let decelRafId = null;
 let spinDecelerating = false;
 let spinIndex = 0;
 let lastPicked = null;
+// 减速动画状态
+let decelStartIndex = 0;
+let decelTargetIndex = 0;
+let decelStartTime = 0;
 
 function loadData() {
   try {
@@ -709,6 +712,24 @@ function formatTime(ts) {
 }
 
 // ============ 转盘渲染 ============
+
+// 动态获取实际 item 高度（移动端 CSS 可能覆盖为 50px）
+function getItemHeight() {
+  const list = document.getElementById('rouletteList');
+  if (list && list.firstElementChild) {
+    return list.firstElementChild.offsetHeight || 60;
+  }
+  return 60;
+}
+
+// 动态计算需要渲染的副本数（基于可视区域高度，至少 7 份）
+function getSpinCopies() {
+  const stage = document.querySelector('.roulette-stage');
+  const visibleH = stage ? stage.clientHeight : 180;
+  const itemH = getItemHeight();
+  return Math.max(7, Math.ceil(visibleH / itemH) + 4);
+}
+
 function renderRoulette() {
   const list = document.getElementById('rouletteList');
   const filtered = getFilteredDishes();
@@ -717,26 +738,28 @@ function renderRoulette() {
     spinIndex = 0;
     return;
   }
-  // 重复 SPIN_COPIES 份以形成循环滚动感，份数足够多避免越界空白
+  const copies = getSpinCopies();
   const items = [];
-  for (let r = 0; r < SPIN_COPIES; r++) {
+  for (let r = 0; r < copies; r++) {
     filtered.forEach(d => {
       items.push(`<div class="roulette-item">${d.name}</div>`);
     });
   }
   list.innerHTML = items.join('');
-  // 初始位置设在中间那组（第3份）
-  spinIndex = filtered.length * 3;
-  updateRoulettePosition(0);
+  // 初始位置设在中间组
+  spinIndex = filtered.length * Math.floor(copies / 2);
+  updateRoulettePosition();
 }
 
-function updateRoulettePosition(duration = 0) {
+function updateRoulettePosition() {
   const list = document.getElementById('rouletteList');
   if (!list) return;
-  const offset = spinIndex * ITEM_HEIGHT - ITEM_HEIGHT;
-  list.style.transition = duration > 0
-    ? `transform ${duration}ms cubic-bezier(0.22, 0.05, 0.1, 0.97)`
-    : 'none';
+  const itemH = getItemHeight();
+  const stage = document.querySelector('.roulette-stage');
+  const windowH = stage ? stage.clientHeight : 180;
+  // 把当前项居中到指示器位置
+  const offset = spinIndex * itemH - (windowH / 2) + (itemH / 2);
+  list.style.transition = 'none';
   list.style.transform = `translateY(-${offset}px)`;
   // 高亮当前项
   const items = list.querySelectorAll('.roulette-item');
@@ -745,39 +768,35 @@ function updateRoulettePosition(duration = 0) {
   });
 }
 
-// 将 spinIndex 规范化到可见范围（中间几份副本），防止越界空白
-// 同时也是 startPick / quickPick 设置初始位置的统一入口
+// 获取 wrap 计算所需的参数
+function _wrapParams() {
+  const filteredLen = getFilteredDishes().length;
+  if (filteredLen === 0) return { filteredLen: 0, copies: 7, totalItems: 0, midGroup: 3 };
+  const copies = getSpinCopies();
+  const totalItems = filteredLen * copies;
+  const midGroup = Math.floor(copies / 2);
+  return { filteredLen, copies, totalItems, midGroup };
+}
+
+// 将 spinIndex 规范化到可见范围（处理任意大小的跳转）
 function normalizeSpinIndex() {
-  const filteredLen = getFilteredDishes().length;
+  const { filteredLen, copies, totalItems, midGroup } = _wrapParams();
   if (filteredLen === 0) return;
-  const totalItems = filteredLen * SPIN_COPIES;
-  // 由给定的 index 一步跳到安全区，避免 while 循环（每次调用变化量是 bounded 的）
-  if (spinIndex >= totalItems - filteredLen) {
-    spinIndex = (spinIndex % filteredLen) + filteredLen * 3;
-  } else if (spinIndex < filteredLen) {
-    spinIndex = (spinIndex % filteredLen) + filteredLen * 3;
+  if (spinIndex >= totalItems - filteredLen || spinIndex < filteredLen) {
+    spinIndex = ((spinIndex % filteredLen) + filteredLen) % filteredLen + filteredLen * midGroup;
   }
 }
 
-// 匀速滚动期间每 tick 调用：增量 +1 后极少越界，用轻量 if 即可
+// 匀速滚动期间每 tick 调用：处理 +1 增量后的越界
 function wrapSpinIndex() {
-  const filteredLen = getFilteredDishes().length;
+  const { filteredLen, totalItems, midGroup } = _wrapParams();
   if (filteredLen === 0) return;
-  const totalItems = filteredLen * SPIN_COPIES;
-  if (spinIndex >= totalItems - filteredLen) {
-    spinIndex -= filteredLen * 3;
-  } else if (spinIndex < filteredLen) {
-    spinIndex += filteredLen * 3;
+  while (spinIndex >= totalItems - filteredLen) {
+    spinIndex -= filteredLen * midGroup;
   }
-}
-
-// stopPick 与 quickPick 共享的减速收尾
-function finishWithDecel() {
-  setTimeout(() => {
-    isSpinning = false;
-    spinDecelerating = false;
-    finishPick();
-  }, DECEL_DURATION + 60);
+  while (spinIndex < filteredLen) {
+    spinIndex += filteredLen * midGroup;
+  }
 }
 
 // ============ 挑选逻辑 ============
@@ -786,12 +805,36 @@ function cancelSpin() {
   isSpinning = false;
   spinDecelerating = false;
   if (spinTimer) { clearTimeout(spinTimer); spinTimer = null; }
+  if (decelRafId) { cancelAnimationFrame(decelRafId); decelRafId = null; }
 }
 
 function setButtonsState(picking, resultReady) {
   document.getElementById('btnPick').style.display = picking ? 'none' : (resultReady ? '' : '');
   document.getElementById('btnStop').style.display = picking ? '' : 'none';
   document.getElementById('btnReroll').style.display = resultReady ? '' : 'none';
+}
+
+// rAF 驱动的减速动画
+function decelStep() {
+  if (!isSpinning) return;
+  const elapsed = performance.now() - decelStartTime;
+  if (elapsed >= DECEL_DURATION) {
+    // 减速结束：精确定位到目标
+    spinIndex = decelTargetIndex;
+    wrapSpinIndex();
+    updateRoulettePosition();
+    spinDecelerating = false;
+    finishPick();
+    return;
+  }
+  // cubic ease-out 插值
+  const progress = elapsed / DECEL_DURATION;
+  const eased = 1 - Math.pow(1 - progress, 3);
+  const distance = decelTargetIndex - decelStartIndex;
+  spinIndex = Math.round(decelStartIndex + distance * eased);
+  wrapSpinIndex();
+  updateRoulettePosition();
+  decelRafId = requestAnimationFrame(decelStep);
 }
 
 function startPick() {
@@ -807,21 +850,20 @@ function startPick() {
     '<div style="color:var(--text2);font-size:1.1em">🎰 转盘中... 按空格键停止</div>';
 
   normalizeSpinIndex();
-  updateRoulettePosition(0);
+  updateRoulettePosition();
   spinOne();
 }
 
 function spinOne() {
   if (!isSpinning) return;
-  if (spinDecelerating) return; // 减速阶段由 CSS transition 接管
+  if (spinDecelerating) { decelStep(); return; }
 
   const filtered = getFilteredDishes();
-  const filteredLen = filtered.length;
-  if (filteredLen === 0) { cancelSpin(); return; }
+  if (filtered.length === 0) { cancelSpin(); return; }
 
   spinIndex++;
   wrapSpinIndex();
-  updateRoulettePosition(SPIN_INTERVAL * 0.8);
+  updateRoulettePosition(); // 即时更新，无 CSS transition
 
   spinTimer = setTimeout(spinOne, SPIN_INTERVAL);
 }
@@ -834,17 +876,15 @@ function stopPick() {
   document.getElementById('btnStop').textContent = '⏳ 即将揭晓...';
 
   const filtered = getFilteredDishes();
-  const filteredLen = filtered.length;
-  if (filteredLen === 0) { cancelSpin(); return; }
+  if (filtered.length === 0) { cancelSpin(); return; }
 
-  // 随机多转 5~14 个条目后停下（产生不确定性）
-  const extraItems = 5 + Math.floor(Math.random() * 10);
-  spinIndex += extraItems;
-  wrapSpinIndex();
+  // 记录减速起点，额外多转 8~18 个条目作为减速距离
+  decelStartIndex = spinIndex;
+  const extraItems = 8 + Math.floor(Math.random() * 11);
+  decelTargetIndex = spinIndex + extraItems;
+  decelStartTime = performance.now();
 
-  // 用 CSS transition 在 0.4 秒内平滑减速到位
-  updateRoulettePosition(DECEL_DURATION);
-  finishWithDecel();
+  decelStep();
 }
 
 function finishPick() {
@@ -877,7 +917,7 @@ function finishPick() {
 }
 
 function quickPick() {
-  // 快速随机：取消当前动画，在 0.4 秒内平滑滚动到随机结果
+  // 快速随机：rAF 驱动平滑滚动到随机结果
   const filtered = getFilteredDishes();
   if (filtered.length === 0) { alert('请先添加菜品！'); return; }
 
@@ -897,11 +937,12 @@ function quickPick() {
   // 多转 2~3 圈后落到目标
   const currentGroup = Math.floor(spinIndex / filteredLen);
   const extraRounds = 2 + Math.floor(Math.random() * 2);
-  const targetSpinIndex = (currentGroup + extraRounds) * filteredLen + targetIdx;
 
-  spinIndex = targetSpinIndex;
-  updateRoulettePosition(DECEL_DURATION);
-  finishWithDecel();
+  decelStartIndex = spinIndex;
+  decelTargetIndex = (currentGroup + extraRounds) * filteredLen + targetIdx;
+  decelStartTime = performance.now();
+
+  decelStep();
 }
 
 // ============ 快捷键 ============
