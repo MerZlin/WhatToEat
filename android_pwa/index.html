@@ -593,6 +593,7 @@ let spinTimer = null;
 let decelRafId = null;
 let spinDecelerating = false;
 let spinIndex = 0;
+let prevActiveIndex = -1;
 let lastPicked = null;
 // 减速动画状态
 let decelStartIndex = 0;
@@ -746,6 +747,7 @@ function renderRoulette() {
     });
   }
   list.innerHTML = items.join('');
+  prevActiveIndex = -1; // DOM 重建后缓存失效
   // 初始位置设在中间组
   spinIndex = filtered.length * Math.floor(copies / 2);
   updateRoulettePosition();
@@ -761,11 +763,17 @@ function updateRoulettePosition() {
   const offset = spinIndex * itemH - (windowH / 2) + (itemH / 2);
   list.style.transition = 'none';
   list.style.transform = `translateY(-${offset}px)`;
-  // 高亮当前项
-  const items = list.querySelectorAll('.roulette-item');
-  items.forEach((el, i) => {
-    el.classList.toggle('active', i === spinIndex);
-  });
+  // 高亮当前项（O(1)：仅切换新旧两项，避免 rAF 每帧全量遍历）
+  if (prevActiveIndex !== spinIndex) {
+    const items = list.querySelectorAll('.roulette-item');
+    if (prevActiveIndex >= 0 && prevActiveIndex < items.length) {
+      items[prevActiveIndex].classList.remove('active');
+    }
+    if (spinIndex >= 0 && spinIndex < items.length) {
+      items[spinIndex].classList.add('active');
+    }
+    prevActiveIndex = spinIndex;
+  }
 }
 
 // 获取 wrap 计算所需的参数
@@ -825,6 +833,7 @@ function decelStep() {
     updateRoulettePosition();
     isSpinning = false;
     spinDecelerating = false;
+    decelRafId = null;
     finishPick();
     return;
   }
