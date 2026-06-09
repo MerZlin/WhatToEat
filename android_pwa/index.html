@@ -745,22 +745,39 @@ function updateRoulettePosition(duration = 0) {
   });
 }
 
-// 保证 spinIndex 始终在可见范围内（中间几份副本），防止越界空白
-function wrapSpinIndex() {
-  const filtered = getFilteredDishes();
-  const filteredLen = filtered.length;
+// 将 spinIndex 规范化到可见范围（中间几份副本），防止越界空白
+// 同时也是 startPick / quickPick 设置初始位置的统一入口
+function normalizeSpinIndex() {
+  const filteredLen = getFilteredDishes().length;
   if (filteredLen === 0) return;
   const totalItems = filteredLen * SPIN_COPIES;
-  // 超出上界时跳回
-  while (spinIndex >= totalItems - filteredLen) {
+  // 由给定的 index 一步跳到安全区，避免 while 循环（每次调用变化量是 bounded 的）
+  if (spinIndex >= totalItems - filteredLen) {
+    spinIndex = (spinIndex % filteredLen) + filteredLen * 3;
+  } else if (spinIndex < filteredLen) {
+    spinIndex = (spinIndex % filteredLen) + filteredLen * 3;
+  }
+}
+
+// 匀速滚动期间每 tick 调用：增量 +1 后极少越界，用轻量 if 即可
+function wrapSpinIndex() {
+  const filteredLen = getFilteredDishes().length;
+  if (filteredLen === 0) return;
+  const totalItems = filteredLen * SPIN_COPIES;
+  if (spinIndex >= totalItems - filteredLen) {
     spinIndex -= filteredLen * 3;
-    updateRoulettePosition(0);
-  }
-  // 低于下界时跳前
-  while (spinIndex < filteredLen) {
+  } else if (spinIndex < filteredLen) {
     spinIndex += filteredLen * 3;
-    updateRoulettePosition(0);
   }
+}
+
+// stopPick 与 quickPick 共享的减速收尾
+function finishWithDecel() {
+  setTimeout(() => {
+    isSpinning = false;
+    spinDecelerating = false;
+    finishPick();
+  }, DECEL_DURATION + 60);
 }
 
 // ============ 挑选逻辑 ============
@@ -789,12 +806,7 @@ function startPick() {
   document.getElementById('resultArea').innerHTML =
     '<div style="color:var(--text2);font-size:1.1em">🎰 转盘中... 按空格键停止</div>';
 
-  // 确保当前位置在有效可视范围内（中间组）
-  const filteredLen = filtered.length;
-  if (spinIndex < filteredLen) spinIndex += filteredLen * 3;
-  if (spinIndex >= filteredLen * SPIN_COPIES) {
-    spinIndex = (spinIndex % filteredLen) + filteredLen * 3;
-  }
+  normalizeSpinIndex();
   updateRoulettePosition(0);
   spinOne();
 }
@@ -832,12 +844,7 @@ function stopPick() {
 
   // 用 CSS transition 在 0.4 秒内平滑减速到位
   updateRoulettePosition(DECEL_DURATION);
-
-  setTimeout(() => {
-    isSpinning = false;
-    spinDecelerating = false;
-    finishPick();
-  }, DECEL_DURATION + 60);
+  finishWithDecel();
 }
 
 function finishPick() {
@@ -885,11 +892,7 @@ function quickPick() {
   const filteredLen = filtered.length;
   const targetIdx = Math.floor(Math.random() * filteredLen);
 
-  // 确保 spinIndex 在有效范围
-  if (spinIndex < filteredLen) spinIndex += filteredLen * 3;
-  if (spinIndex >= filteredLen * SPIN_COPIES) {
-    spinIndex = (spinIndex % filteredLen) + filteredLen * 3;
-  }
+  normalizeSpinIndex();
 
   // 多转 2~3 圈后落到目标
   const currentGroup = Math.floor(spinIndex / filteredLen);
@@ -898,12 +901,7 @@ function quickPick() {
 
   spinIndex = targetSpinIndex;
   updateRoulettePosition(DECEL_DURATION);
-
-  setTimeout(() => {
-    isSpinning = false;
-    spinDecelerating = false;
-    finishPick();
-  }, DECEL_DURATION + 60);
+  finishWithDecel();
 }
 
 // ============ 快捷键 ============
