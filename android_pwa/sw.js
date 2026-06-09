@@ -32,7 +32,6 @@ self.addEventListener('activate', (event) => {
 
 // 判断是否为页面请求（HTML）
 function isPageRequest(request) {
-  const url = new URL(request.url);
   return request.mode === 'navigate' ||
     (request.method === 'GET' &&
      request.headers.get('accept') &&
