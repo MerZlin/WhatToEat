@@ -823,6 +823,7 @@ function decelStep() {
     spinIndex = decelTargetIndex;
     wrapSpinIndex();
     updateRoulettePosition();
+    isSpinning = false;
     spinDecelerating = false;
     finishPick();
     return;
